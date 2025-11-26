@@ -8,6 +8,9 @@ def construct_model_base(model_path: str) -> ModelBase:
     if 'llama-3' in model_path.lower():
         from pipeline.model_utils.llama3_model import Llama3Model
         return Llama3Model(model_path)
+    elif "DeepSeek-R1-Distill-Llama-8B" in model_path:
+        from pipeline.model_utils.deepseek_r1_llama8b import Llama3Model
+        return Llama3Model(model_path)    
     elif 'llama' in model_path.lower():
         from pipeline.model_utils.llama2_model import Llama2Model
         return Llama2Model(model_path)
