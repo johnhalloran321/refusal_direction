@@ -81,23 +81,61 @@ def refusal_score(
     nonrefusal_probs = torch.ones_like(refusal_probs) - refusal_probs
     return torch.log(refusal_probs + epsilon) - torch.log(nonrefusal_probs + epsilon)
 
-def get_refusal_scores(model, instructions, tokenize_instructions_fn, refusal_toks, fwd_pre_hooks=[], fwd_hooks=[], batch_size=10):
-    refusal_score_fn = functools.partial(refusal_score, refusal_toks=refusal_toks)
-
+def get_refusal_scores(model, instructions, tokenize_instructions_fn, refusal_toks, fwd_pre_hooks=[], fwd_hooks=[], batch_size=32):
     refusal_scores = torch.zeros(len(instructions), device=model.device)
 
     for i in range(0, len(instructions), batch_size):
         tokenized_instructions = tokenize_instructions_fn(instructions=instructions[i:i+batch_size])
 
         with add_hooks(module_forward_pre_hooks=fwd_pre_hooks, module_forward_hooks=fwd_hooks):
-            logits = model(
+            # Generate a few tokens instead of just getting logits
+            outputs = model.generate(
                 input_ids=tokenized_instructions.input_ids.to(model.device),
                 attention_mask=tokenized_instructions.attention_mask.to(model.device),
-            ).logits
-
-        refusal_scores[i:i+batch_size] = refusal_score_fn(logits=logits)
+                max_new_tokens=10,  # Generate just a few tokens
+                return_dict_in_generate=True,
+                output_scores=True,  # Get logits for each generation step
+                do_sample=False
+            )
+            
+            # outputs.scores is a tuple of tensors, one per generation step
+            # Each has shape [batch_size, vocab_size]
+            # We want to check if refusal tokens appear in first few generated tokens
+            
+            batch_refusal_scores = []
+            for batch_idx in range(len(outputs.scores[0])):
+                # Check across the first few generated positions
+                max_refusal_prob = 0.0
+                for step_logits in outputs.scores[:5]:  # Check first 5 generated tokens
+                    probs = torch.nn.functional.softmax(step_logits[batch_idx].to(torch.float64), dim=-1)
+                    refusal_prob = probs[refusal_toks].sum().item()
+                    max_refusal_prob = max(max_refusal_prob, refusal_prob)
+                
+                # Convert to score
+                nonrefusal_prob = 1.0 - max_refusal_prob
+                score = torch.log(torch.tensor(max_refusal_prob + 1e-8)) - torch.log(torch.tensor(nonrefusal_prob + 1e-8))
+                batch_refusal_scores.append(score)
+            
+            refusal_scores[i:i+batch_size] = torch.tensor(batch_refusal_scores, device=model.device)
 
     return refusal_scores
+# def get_refusal_scores(model, instructions, tokenize_instructions_fn, refusal_toks, fwd_pre_hooks=[], fwd_hooks=[], batch_size=10):
+#     refusal_score_fn = functools.partial(refusal_score, refusal_toks=refusal_toks)
+
+#     refusal_scores = torch.zeros(len(instructions), device=model.device)
+
+#     for i in range(0, len(instructions), batch_size):
+#         tokenized_instructions = tokenize_instructions_fn(instructions=instructions[i:i+batch_size])
+
+#         with add_hooks(module_forward_pre_hooks=fwd_pre_hooks, module_forward_hooks=fwd_hooks):
+#             logits = model(
+#                 input_ids=tokenized_instructions.input_ids.to(model.device),
+#                 attention_mask=tokenized_instructions.attention_mask.to(model.device),
+#             ).logits
+
+#         refusal_scores[i:i+batch_size] = refusal_score_fn(logits=logits)
+
+#     return refusal_scores
 
 def get_last_position_logits(model, tokenizer, instructions, tokenize_instructions_fn, fwd_pre_hooks=[], fwd_hooks=[], batch_size=32) -> Float[Tensor, "n_instructions d_vocab"]:
     last_position_logits = None
