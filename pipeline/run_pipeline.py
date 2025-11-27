@@ -86,7 +86,7 @@ def filter_data(cfg, model_base, harmful_train, harmless_train, harmful_val, har
             print(f"  Refusal score: {harmful_train_scores[i]:.4f}")
         print("="*80 + "\n")
 
-        exit(-1)
+        # exit(-1)
         harmful_train = filter_examples(harmful_train, harmful_train_scores, 0, lambda x, y: x > y)
         harmless_train = filter_examples(harmless_train, harmless_train_scores, 0, lambda x, y: x < y)
 
@@ -97,64 +97,156 @@ def filter_data(cfg, model_base, harmful_train, harmless_train, harmful_val, har
         harmless_val = filter_examples(harmless_val, harmless_val_scores, 0, lambda x, y: x < y)
     
     return harmful_train, harmless_train, harmful_val, harmless_val
+def get_orthogonalized_matrix(matrix, direction):
+    direction = direction.to(dtype=matrix.dtype, device=matrix.device)
+    proj = matrix.T @ direction
+    return matrix - torch.outer(direction, proj)
 
 def orthogonalize_and_save_model(cfg, model_base, direction, layers_to_modify=None):
-    """
-    Permanently orthogonalize model weights and save the modified model.
+    from tqdm import tqdm
     
-    This applies the same orthogonalization that hooks would apply temporarily,
-    but directly modifies the weight matrices permanently.
-    """
-    # Get the orthogonalization modification function from ModelBase
-    ortho_mod_fn = model_base._get_orthogonalization_mod_fn(direction)
+    # Access actual layer objects (not module references)
+    all_layers = model_base.model.model.layers  # Adjust if different
     
-    # Determine which layers to modify
     if layers_to_modify is None:
-        # Apply to all layers (same as get_all_direction_ablation_hooks does)
-        layers_to_modify = range(len(model_base.model_block_modules))
+        layers_to_modify = range(len(all_layers))
     
-    print(f"Orthogonalizing layers: {list(layers_to_modify)}")
+    direction = direction.to(model_base.model.device).squeeze()
+    direction = direction / direction.norm()
     
-    # Move direction to model device
-    device = model_base.model.device
-    direction = direction.to(device)
-    
-    # Apply orthogonalization to each layer's weights
-    for layer_idx in layers_to_modify:
-        # Get attention and MLP modules for this layer
-        attn_module = model_base.model_attn_modules[layer_idx]
-        mlp_module = model_base.model_mlp_modules[layer_idx]
+    modified = 0
+    for idx in tqdm(list(layers_to_modify)):
+        layer = all_layers[idx]
         
-        # Apply orthogonalization to attention module's weight
-        if hasattr(attn_module, 'weight'):
-            original_weight = attn_module.weight.data
-            attn_module.weight.data = ortho_mod_fn(original_weight)
-            print(f"  Layer {layer_idx}: Orthogonalized attention weight")
+        # Orthogonalize attention output (adjust attribute names if needed)
+        if hasattr(layer.self_attn, 'o_proj'):
+            layer.self_attn.o_proj.weight.data = get_orthogonalized_matrix(
+                layer.self_attn.o_proj.weight.data, direction
+            )
+            modified += 1
         
-        # Apply orthogonalization to MLP module's weight
-        if hasattr(mlp_module, 'weight'):
-            original_weight = mlp_module.weight.data
-            mlp_module.weight.data = ortho_mod_fn(original_weight)
-            print(f"  Layer {layer_idx}: Orthogonalized MLP weight")
+        # Orthogonalize MLP output
+        if hasattr(layer.mlp, 'down_proj'):
+            layer.mlp.down_proj.weight.data = get_orthogonalized_matrix(
+                layer.mlp.down_proj.weight.data, direction
+            )
+            modified += 1
     
-    # Save the modified model
+    print(f"\nModified {modified} weights")
+    
+    # Verify
+    W = all_layers[len(all_layers)//2].mlp.down_proj.weight.data
+    direction_verify = direction.to(dtype=W.dtype)
+    print(f"Verification: {torch.abs(W.T @ direction_verify).max():.6f}")    
+    # print(f"Verification: {torch.abs(W.T @ direction).max():.6f}  ")
+    
+    # Save
     output_dir = os.path.join(cfg.artifact_path(), 'abliterated_model')
     os.makedirs(output_dir, exist_ok=True)
-    
-    print(f"\nSaving abliterated model to {output_dir}...")
     model_base.model.save_pretrained(output_dir, safe_serialization=True)
     model_base.tokenizer.save_pretrained(output_dir)
-    
-    # Save metadata
-    metadata = {
-        "layers_modified": list(layers_to_modify),
-        "model_path": cfg.model_path,
-    }
-    with open(os.path.join(output_dir, 'abliteration_metadata.json'), 'w') as f:
-        json.dump(metadata, f, indent=4)
-    
-    print(f"Model saved successfully to {output_dir}")
     return output_dir
+# def get_orthogonalized_matrix(matrix, direction):
+#     """Orthogonalize matrix columns with respect to direction."""
+#     direction = direction / direction.norm()
+#     proj = matrix.T @ direction
+#     return matrix - torch.outer(direction, proj)
+
+# def orthogonalize_and_save_model(cfg, model_base, direction, layers_to_modify=None):
+#     """Permanently orthogonalize model weights and save."""
+#     from tqdm import tqdm
+    
+#     if layers_to_modify is None:
+#         layers_to_modify = range(len(model_base.model_block_modules))
+    
+#     device = model_base.model.device
+#     direction = direction.to(device).to(model_base.model.dtype).squeeze()
+#     direction = direction / direction.norm()
+    
+#     for layer_idx in tqdm(list(layers_to_modify), desc="Orthogonalizing"):
+#         attn_module = model_base.model_attn_modules[layer_idx]
+#         mlp_module = model_base.model_mlp_modules[layer_idx]
+        
+#         if hasattr(attn_module, 'weight'):
+#             attn_module.weight.data = get_orthogonalized_matrix(
+#                 attn_module.weight.data, direction
+#             )
+        
+#         if hasattr(mlp_module, 'weight'):
+#             mlp_module.weight.data = get_orthogonalized_matrix(
+#                 mlp_module.weight.data, direction
+#             )
+    
+#     # Verify
+#     test_module = model_base.model_mlp_modules[len(list(layers_to_modify))//2]
+#     if hasattr(test_module, 'weight'):
+#         dots = torch.abs(test_module.weight.data.T @ direction).max().item()
+#         print(f"Verification: max |col·direction| = {dots:.6f}")
+    
+#     # Save
+#     output_dir = os.path.join(cfg.artifact_path(), 'abliterated_model')
+#     os.makedirs(output_dir, exist_ok=True)
+#     model_base.model.save_pretrained(output_dir, safe_serialization=True)
+#     model_base.tokenizer.save_pretrained(output_dir)
+    
+#     return output_dir
+# def orthogonalize_and_save_model(cfg, model_base, direction, layers_to_modify=None):
+#     """
+#     Permanently orthogonalize model weights and save the modified model.
+    
+#     This applies the same orthogonalization that hooks would apply temporarily,
+#     but directly modifies the weight matrices permanently.
+#     """
+#     # Get the orthogonalization modification function from ModelBase
+#     ortho_mod_fn = model_base._get_orthogonalization_mod_fn(direction)
+    
+#     # Determine which layers to modify
+#     if layers_to_modify is None:
+#         # Apply to all layers (same as get_all_direction_ablation_hooks does)
+#         layers_to_modify = range(len(model_base.model_block_modules))
+    
+#     print(f"Orthogonalizing layers: {list(layers_to_modify)}")
+    
+#     # Move direction to model device
+#     device = model_base.model.device
+#     direction = direction.to(device)
+    
+#     # Apply orthogonalization to each layer's weights
+#     for layer_idx in layers_to_modify:
+#         # Get attention and MLP modules for this layer
+#         attn_module = model_base.model_attn_modules[layer_idx]
+#         mlp_module = model_base.model_mlp_modules[layer_idx]
+        
+#         # Apply orthogonalization to attention module's weight
+#         if hasattr(attn_module, 'weight'):
+#             original_weight = attn_module.weight.data
+#             attn_module.weight.data = ortho_mod_fn(original_weight)
+#             print(f"  Layer {layer_idx}: Orthogonalized attention weight")
+        
+#         # Apply orthogonalization to MLP module's weight
+#         if hasattr(mlp_module, 'weight'):
+#             original_weight = mlp_module.weight.data
+#             mlp_module.weight.data = ortho_mod_fn(original_weight)
+#             print(f"  Layer {layer_idx}: Orthogonalized MLP weight")
+    
+#     # Save the modified model
+#     output_dir = os.path.join(cfg.artifact_path(), 'abliterated_model')
+#     os.makedirs(output_dir, exist_ok=True)
+    
+#     print(f"\nSaving abliterated model to {output_dir}...")
+#     model_base.model.save_pretrained(output_dir, safe_serialization=True)
+#     model_base.tokenizer.save_pretrained(output_dir)
+    
+#     # Save metadata
+#     metadata = {
+#         "layers_modified": list(layers_to_modify),
+#         "model_path": cfg.model_path,
+#     }
+#     with open(os.path.join(output_dir, 'abliteration_metadata.json'), 'w') as f:
+#         json.dump(metadata, f, indent=4)
+    
+#     print(f"Model saved successfully to {output_dir}")
+#     return output_dir
 
 def generate_and_save_candidate_directions(cfg, model_base, harmful_train, harmless_train):
     """Generate and save candidate directions."""
@@ -254,7 +346,7 @@ def run_pipeline(model_path):
     # Load and sample datasets
     harmful_train, harmless_train, harmful_val, harmless_val = load_and_sample_datasets(cfg)
     # Filter datasets based on refusal scores
-    # harmful_train, harmless_train, harmful_val, harmless_val = filter_data(cfg, model_base, harmful_train, harmless_train, harmful_val, harmless_val)
+    harmful_train, harmless_train, harmful_val, harmless_val = filter_data(cfg, model_base, harmful_train, harmless_train, harmful_val, harmless_val)
 
     # 1. Generate candidate refusal directions
     candidate_directions = generate_and_save_candidate_directions(cfg, model_base, harmful_train, harmless_train)
