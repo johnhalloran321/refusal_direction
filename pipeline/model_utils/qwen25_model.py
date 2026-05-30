@@ -114,8 +114,36 @@ class Qwen25Model(ModelBase):
         return self.tokenizer.encode(QWEN25_CHAT_TEMPLATE.split("{instruction}")[-1], add_special_tokens=False)
 
     def _get_refusal_toks(self):
-        refusal_phrases = ["I", " I", "Sorry", " Sorry", "sorry", " sorry",
-                           " cannot", " can't", " unable", " apologize"]
+        refusal_phrases = [
+            "I ",
+            " cannot",
+            " able",
+            "I apologize",
+            "However",
+            " However",
+            "Sorry,",
+            " Sorry,",
+            "sorry,",
+            " sorry,",
+            "legal",
+            "Legal",
+            " legal",
+            " Legal",
+            " respect",
+            " Respect",
+            "Respect",
+            "respect",
+            " illegal",
+            " unethical",
+            " Illegal",
+            "Illegal",
+            "ethical",
+            "serious",
+            " Serious",
+            " serious",
+            " concerning",
+            " Concern",
+        ]
 
         refusal_toks = []
         for phrase in refusal_phrases:

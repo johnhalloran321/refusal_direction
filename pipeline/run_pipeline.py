@@ -124,14 +124,30 @@ def filter_data(cfg, model_base, harmful_train, harmless_train, harmful_val, har
         print("="*80 + "\n")
 
         # exit(-1)
-        harmful_train = filter_examples(harmful_train, harmful_train_scores, 0, lambda x, y: x > y)
-        harmless_train = filter_examples(harmless_train, harmless_train_scores, 0, lambda x, y: x < y)
+        filtered_harmful_train = filter_examples(harmful_train, harmful_train_scores, 0, lambda x, y: x > y)
+        filtered_harmless_train = filter_examples(harmless_train, harmless_train_scores, 0, lambda x, y: x < y)
+        if len(filtered_harmful_train) == 0:
+            print("WARNING: filtering removed all harmful_train examples — keeping unfiltered set")
+        else:
+            harmful_train = filtered_harmful_train
+        if len(filtered_harmless_train) == 0:
+            print("WARNING: filtering removed all harmless_train examples — keeping unfiltered set")
+        else:
+            harmless_train = filtered_harmless_train
 
     if cfg.filter_val:
         harmful_val_scores = get_refusal_scores(model_base.model, harmful_val, model_base.tokenize_instructions_fn, model_base.refusal_toks)
         harmless_val_scores = get_refusal_scores(model_base.model, harmless_val, model_base.tokenize_instructions_fn, model_base.refusal_toks)
-        harmful_val = filter_examples(harmful_val, harmful_val_scores, 0, lambda x, y: x > y)
-        harmless_val = filter_examples(harmless_val, harmless_val_scores, 0, lambda x, y: x < y)
+        filtered_harmful_val = filter_examples(harmful_val, harmful_val_scores, 0, lambda x, y: x > y)
+        filtered_harmless_val = filter_examples(harmless_val, harmless_val_scores, 0, lambda x, y: x < y)
+        if len(filtered_harmful_val) == 0:
+            print("WARNING: filtering removed all harmful_val examples — keeping unfiltered set")
+        else:
+            harmful_val = filtered_harmful_val
+        if len(filtered_harmless_val) == 0:
+            print("WARNING: filtering removed all harmless_val examples — keeping unfiltered set")
+        else:
+            harmless_val = filtered_harmless_val
     
     return harmful_train, harmless_train, harmful_val, harmless_val
 def get_orthogonalized_matrix(matrix, direction):
