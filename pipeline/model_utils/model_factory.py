@@ -8,9 +8,9 @@ def construct_model_base(model_path: str) -> ModelBase:
     elif "Qwen2.5-14B" in model_path:
         from pipeline.model_utils.qwen25_model import Qwen25Model
         return Qwen25Model(model_path)            
-    elif "DeepSeek-R1-Distill-Qwen-14B" in model_path or "Qwen2.5-14B" in model_path:
-        from pipeline.model_utils.deepseek_r1_qwen14b import Llama3Model
-        return Llama3Model(model_path)        
+    elif "DeepSeek-R1-Distill-Qwen-14B" in model_path:
+        from pipeline.model_utils.deepseek_r1_qwen14b import DeepseekR1Qwen14BModel
+        return DeepseekR1Qwen14BModel(model_path)
     elif 'qwen' in model_path.lower():
         from pipeline.model_utils.qwen_model import QwenModel
         return QwenModel(model_path)

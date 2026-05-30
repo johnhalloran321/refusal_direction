@@ -23,12 +23,14 @@ def parse_arguments():
     parser.add_argument('--ablation', action='store_true', help='Use AdvBench as the harmful dataset instead of the default split (for dataset sensitivity ablation)')
     return parser.parse_args()
 
-def load_lima_instructions():
-    """Load LIMA instructions (first user turn) directly from HuggingFace datasets."""
+def load_lima_instructions(max_chars=512):
+    """Load LIMA instructions (first user turn) directly from HuggingFace datasets.
+
+    Caps each instruction at `max_chars` characters to avoid OOM from long prompts.
+    """
     from datasets import load_dataset as hf_load_dataset
     lima = hf_load_dataset("Ki-Seki/GAIR_lima", split="train")
-    # Each example has a 'conversations' list: [user_turn, assistant_turn, ...]
-    return [example["conversations"][0] for example in lima]
+    return [example["conversations"][0][:max_chars] for example in lima]
 
 def load_and_sample_datasets(cfg, use_advbench=False):
     """
