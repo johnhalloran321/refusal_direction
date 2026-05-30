@@ -298,7 +298,7 @@ def generate_and_save_candidate_directions(cfg, model_base, harmful_train, harml
 
     return mean_diffs
 
-def select_and_save_direction(cfg, model_base, harmful_val, harmless_val, candidate_directions):
+def select_and_save_direction(cfg, model_base, harmful_val, harmless_val, candidate_directions, batch_size=32):
     """Select and save the direction."""
     if not os.path.exists(os.path.join(cfg.artifact_path(), 'select_direction')):
         os.makedirs(os.path.join(cfg.artifact_path(), 'select_direction'))
@@ -308,7 +308,8 @@ def select_and_save_direction(cfg, model_base, harmful_val, harmless_val, candid
         harmful_val,
         harmless_val,
         candidate_directions,
-        artifact_dir=os.path.join(cfg.artifact_path(), "select_direction")
+        artifact_dir=os.path.join(cfg.artifact_path(), "select_direction"),
+        batch_size=batch_size
     )
 
     with open(f'{cfg.artifact_path()}/direction_metadata.json', "w") as f:
@@ -390,7 +391,7 @@ def run_pipeline(model_path):
     candidate_directions = generate_and_save_candidate_directions(cfg, model_base, harmful_train, harmless_train)
     
     # 2. Select the most effective refusal direction
-    pos, layer, direction = select_and_save_direction(cfg, model_base, harmful_val, harmless_val, candidate_directions)
+    pos, layer, direction = select_and_save_direction(cfg, model_base, harmful_val, harmless_val, candidate_directions, batch_size=args.batch_size)
 
     baseline_fwd_pre_hooks, baseline_fwd_hooks = [], []
     ablation_fwd_pre_hooks, ablation_fwd_hooks = get_all_direction_ablation_hooks(model_base, direction)
