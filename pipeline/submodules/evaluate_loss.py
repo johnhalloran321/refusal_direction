@@ -22,8 +22,13 @@ def batch_iterator_chat_completions(dataset_instructions, dataset_outputs, token
 
         # also mask out all tokens before the eoi token region
         for b in range(inputs["input_ids"].shape[0]):
-            for i in range(inputs["input_ids"].shape[1]):
-
+            seq_len = inputs["input_ids"].shape[1]
+            for i in range(seq_len):
+                
+                # ADD: Check if there are enough tokens remaining
+                if i + eoi_toks.shape[0] > seq_len:
+                    break  # Not enough tokens left to match eoi_toks
+                
                 if torch.all(inputs["input_ids"][b, i:i+eoi_toks.shape[0]] == eoi_toks):
                     loss_mask[b, :i + eoi_toks.shape[0] - 1] = 0
                     break
@@ -32,8 +37,21 @@ def batch_iterator_chat_completions(dataset_instructions, dataset_outputs, token
                 if eoi_toks.shape[0] == 6 and (inputs["input_ids"][b, i:i+eoi_toks.shape[0]] == eoi_toks).sum().item() >= eoi_toks.shape[0] - 2:
                     loss_mask[b, :i + eoi_toks.shape[0] - 1] = 0
                     break
+        yield inputs, loss_mask
+        # # also mask out all tokens before the eoi token region
+        # for b in range(inputs["input_ids"].shape[0]):
+        #     for i in range(inputs["input_ids"].shape[1]):
 
-        yield inputs, loss_mask 
+        #         if torch.all(inputs["input_ids"][b, i:i+eoi_toks.shape[0]] == eoi_toks):
+        #             loss_mask[b, :i + eoi_toks.shape[0] - 1] = 0
+        #             break
+
+        #         # normally the above condition works. but the tokenization instruction tokens in Llama2 is not clean, and so we need this hack
+        #         if eoi_toks.shape[0] == 6 and (inputs["input_ids"][b, i:i+eoi_toks.shape[0]] == eoi_toks).sum().item() >= eoi_toks.shape[0] - 2:
+        #             loss_mask[b, :i + eoi_toks.shape[0] - 1] = 0
+        #             break
+
+        # yield inputs, loss_mask 
 
 def batch_iterator_custom_completions(completions_file_path: str, tokenize_instructions_fn, batch_size, eoi_toks):
     """Yields batches from the custom completions."""

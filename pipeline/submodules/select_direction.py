@@ -14,6 +14,57 @@ from einops import rearrange
 from pipeline.model_utils.model_base import ModelBase
 from pipeline.utils.hook_utils import add_hooks, get_activation_addition_input_pre_hook, get_direction_ablation_input_pre_hook, get_direction_ablation_output_hook
 
+# def refusal_score(
+#     logits: Float[Tensor, 'batch seq d_vocab_out'],
+#     refusal_toks: Int[Tensor, 'batch seq'],
+#     epsilon: Float = 1e-8,
+#     check_position: int = -1,  # ADD: which position to check
+# ):
+#     logits = logits.to(torch.float64)
+
+#     # Check the specified position (default -1 for last token)
+#     logits = logits[:, check_position, :]
+
+#     probs = torch.nn.functional.softmax(logits, dim=-1)
+#     refusal_probs = probs[:, refusal_toks].sum(dim=-1)
+
+#     nonrefusal_probs = torch.ones_like(refusal_probs) - refusal_probs
+#     return torch.log(refusal_probs + epsilon) - torch.log(nonrefusal_probs + epsilon)
+
+# def refusal_score(
+#     logits: Float[Tensor, 'batch seq d_vocab_out'],
+#     refusal_toks: Int[Tensor, 'batch seq'],
+#     epsilon: Float = 1e-8,
+# ):
+#     """
+#     Check if refusal tokens appear in the first few generation positions.
+#     """
+#     logits = logits.to(torch.float64)
+
+#     # Check last position (what comes after instruction)
+#     # AND if the sequence is longer, check a few positions into the generation
+#     # For models that generate <think> tags first, we need to look past that
+    
+#     # Get logits for the last input token (predicting first generation token)
+#     last_logits = logits[:, -1, :]
+#     probs = torch.nn.functional.softmax(last_logits, dim=-1)
+#     refusal_probs = probs[:, refusal_toks].sum(dim=-1)
+    
+#     # If sequence is longer (includes generation), also check a few positions ahead
+#     # This catches cases where model generates <think> or other tokens first
+#     if logits.shape[1] > 1:
+#         # Check positions -3, -2, -1 (last 3 tokens of sequence)
+#         for pos in [-3, -2, -1]:
+#             if abs(pos) <= logits.shape[1]:
+#                 pos_logits = logits[:, pos, :]
+#                 pos_probs = torch.nn.functional.softmax(pos_logits, dim=-1)
+#                 pos_refusal_probs = pos_probs[:, refusal_toks].sum(dim=-1)
+#                 # Take max refusal probability across positions
+#                 refusal_probs = torch.max(refusal_probs, pos_refusal_probs)
+
+#     nonrefusal_probs = torch.ones_like(refusal_probs) - refusal_probs
+#     return torch.log(refusal_probs + epsilon) - torch.log(nonrefusal_probs + epsilon)
+
 def refusal_score(
     logits: Float[Tensor, 'batch seq d_vocab_out'],
     refusal_toks: Int[Tensor, 'batch seq'],
@@ -31,22 +82,60 @@ def refusal_score(
     return torch.log(refusal_probs + epsilon) - torch.log(nonrefusal_probs + epsilon)
 
 def get_refusal_scores(model, instructions, tokenize_instructions_fn, refusal_toks, fwd_pre_hooks=[], fwd_hooks=[], batch_size=32):
-    refusal_score_fn = functools.partial(refusal_score, refusal_toks=refusal_toks)
-
     refusal_scores = torch.zeros(len(instructions), device=model.device)
 
     for i in range(0, len(instructions), batch_size):
         tokenized_instructions = tokenize_instructions_fn(instructions=instructions[i:i+batch_size])
 
         with add_hooks(module_forward_pre_hooks=fwd_pre_hooks, module_forward_hooks=fwd_hooks):
-            logits = model(
+            # Generate a few tokens instead of just getting logits
+            outputs = model.generate(
                 input_ids=tokenized_instructions.input_ids.to(model.device),
                 attention_mask=tokenized_instructions.attention_mask.to(model.device),
-            ).logits
-
-        refusal_scores[i:i+batch_size] = refusal_score_fn(logits=logits)
+                max_new_tokens=10,  # Generate just a few tokens
+                return_dict_in_generate=True,
+                output_scores=True,  # Get logits for each generation step
+                do_sample=False
+            )
+            
+            # outputs.scores is a tuple of tensors, one per generation step
+            # Each has shape [batch_size, vocab_size]
+            # We want to check if refusal tokens appear in first few generated tokens
+            
+            batch_refusal_scores = []
+            for batch_idx in range(len(outputs.scores[0])):
+                # Check across the first few generated positions
+                max_refusal_prob = 0.0
+                for step_logits in outputs.scores[:5]:  # Check first 5 generated tokens
+                    probs = torch.nn.functional.softmax(step_logits[batch_idx].to(torch.float64), dim=-1)
+                    refusal_prob = probs[refusal_toks].sum().item()
+                    max_refusal_prob = max(max_refusal_prob, refusal_prob)
+                
+                # Convert to score
+                nonrefusal_prob = 1.0 - max_refusal_prob
+                score = torch.log(torch.tensor(max_refusal_prob + 1e-8)) - torch.log(torch.tensor(nonrefusal_prob + 1e-8))
+                batch_refusal_scores.append(score)
+            
+            refusal_scores[i:i+batch_size] = torch.tensor(batch_refusal_scores, device=model.device)
 
     return refusal_scores
+# def get_refusal_scores(model, instructions, tokenize_instructions_fn, refusal_toks, fwd_pre_hooks=[], fwd_hooks=[], batch_size=10):
+#     refusal_score_fn = functools.partial(refusal_score, refusal_toks=refusal_toks)
+
+#     refusal_scores = torch.zeros(len(instructions), device=model.device)
+
+#     for i in range(0, len(instructions), batch_size):
+#         tokenized_instructions = tokenize_instructions_fn(instructions=instructions[i:i+batch_size])
+
+#         with add_hooks(module_forward_pre_hooks=fwd_pre_hooks, module_forward_hooks=fwd_hooks):
+#             logits = model(
+#                 input_ids=tokenized_instructions.input_ids.to(model.device),
+#                 attention_mask=tokenized_instructions.attention_mask.to(model.device),
+#             ).logits
+
+#         refusal_scores[i:i+batch_size] = refusal_score_fn(logits=logits)
+
+#     return refusal_scores
 
 def get_last_position_logits(model, tokenizer, instructions, tokenize_instructions_fn, fwd_pre_hooks=[], fwd_hooks=[], batch_size=32) -> Float[Tensor, "n_instructions d_vocab"]:
     last_position_logits = None
@@ -123,7 +212,7 @@ def select_direction(
     kl_threshold=0.1, # directions larger KL score are filtered out
     induce_refusal_threshold=0.0, # directions with a lower inducing refusal score are filtered out
     prune_layer_percentage=0.2, # discard the directions extracted from the last 20% of the model
-    batch_size=32
+    batch_size=64
 ):
     if not os.path.exists(artifact_dir):
         os.makedirs(artifact_dir)
@@ -132,6 +221,53 @@ def select_direction(
 
     baseline_refusal_scores_harmful = get_refusal_scores(model_base.model, harmful_instructions, model_base.tokenize_instructions_fn, model_base.refusal_toks, fwd_hooks=[], batch_size=batch_size)
     baseline_refusal_scores_harmless = get_refusal_scores(model_base.model, harmless_instructions, model_base.tokenize_instructions_fn, model_base.refusal_toks, fwd_hooks=[], batch_size=batch_size)
+
+    # # ADD THIS DEBUG SECTION
+    # print("\n" + "="*80)
+    # print("BASELINE REFUSAL SCORES")
+    # print("="*80)
+    # print(baseline_refusal_scores_harmful.shape, baseline_refusal_scores_harmless.shape)
+    # # print(f"Harmful instructions - Mean: {baseline_refusal_scores_harmful.mean():.4f}, Min: {baseline_refusal_scores_harmful.min():.4f}, Max: {baseline_refusal_scores_harmful.max():.4f}")
+    # # print(f"Harmless instructions - Mean: {baseline_refusal_scores_harmless.mean():.4f}, Min: {baseline_refusal_scores_harmless.min():.4f}, Max: {baseline_refusal_scores_harmless.max():.4f}")
+    # print(f"NaN in harmful: {torch.isnan(baseline_refusal_scores_harmful).sum()}/{len(baseline_refusal_scores_harmful)}")
+    # print(f"NaN in harmless: {torch.isnan(baseline_refusal_scores_harmless).sum()}/{len(baseline_refusal_scores_harmless)}")
+    # print("="*80 + "\n")
+
+    # # ADD THIS: Generate sample completions to see what's happening
+    # print("\n" + "="*80)
+    # print("SAMPLE BASELINE COMPLETIONS")
+    # print("="*80)
+
+    # # Test on a few harmful instructions
+    # test_harmful = harmful_instructions[:3]
+    # print(test_harmful)
+    # test_completions = model_base.generate_completions(
+    #     [{'instruction': inst} for inst in test_harmful], 
+    #     fwd_pre_hooks=[], 
+    #     fwd_hooks=[], 
+    #     max_new_tokens=50
+    # )
+
+    # for i, comp in enumerate(test_completions):
+    #     print(f"\nHarmful #{i+1}:")
+    #     print(f"  Instruction: {comp['instruction'][:100]}...")
+    #     print(f"  Response: {comp['generation'][:200]}...")
+
+    # # Test on a few harmless instructions  
+    # test_harmless = harmless_instructions[:3]
+    # test_completions = model_base.generate_completions(
+    #     [{'instruction': inst} for inst in test_harmless],
+    #     fwd_pre_hooks=[],
+    #     fwd_hooks=[],
+    #     max_new_tokens=50
+    # )
+
+    # for i, comp in enumerate(test_completions):
+    #     print(f"\nHarmless #{i+1}:")
+    #     print(f"  Instruction: {comp['instruction'][:100]}...")
+    #     print(f"  Response: {comp['generation'][:200]}...")
+
+    # print("="*80 + "\n")
 
     ablation_kl_div_scores = torch.zeros((n_pos, n_layer), device=model_base.model.device, dtype=torch.float64)
     ablation_refusal_scores = torch.zeros((n_pos, n_layer), device=model_base.model.device, dtype=torch.float64)
@@ -146,6 +282,22 @@ def select_direction(
         fwd_hooks=[],
         batch_size=batch_size
     )
+
+
+    # In select_direction, before the first loop (around line 170)
+    print("\n" + "="*80)
+    print("CHECKING INSTRUCTION COUNTS")
+    print("="*80)
+    print(f"harmful_instructions: {len(harmful_instructions)}")
+    print(f"harmless_instructions: {len(harmless_instructions)}")
+    print(f"candidate_directions shape: {candidate_directions.shape}")
+
+    if len(harmful_instructions) == 0:
+        raise ValueError("harmful_instructions is empty!")
+    if len(harmless_instructions) == 0:
+        raise ValueError("harmless_instructions is empty! Check filtering logic.")
+
+    print("="*80 + "\n")
 
     for source_pos in range(-n_pos, 0):
         for source_layer in tqdm(range(n_layer), desc=f"Computing KL for source position {source_pos}"):

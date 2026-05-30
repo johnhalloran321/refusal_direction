@@ -2,12 +2,24 @@ from pipeline.model_utils.model_base import ModelBase
 
 def construct_model_base(model_path: str) -> ModelBase:
 
-    if 'qwen' in model_path.lower():
+    if 'qwen3' in model_path.lower():
+        from pipeline.model_utils.qwen3_model import Qwen3Model
+        return Qwen3Model(model_path)
+    elif "Qwen2.5-14B" in model_path:
+        from pipeline.model_utils.qwen25_model import Qwen25Model
+        return Qwen25Model(model_path)            
+    elif "DeepSeek-R1-Distill-Qwen-14B" in model_path or "Qwen2.5-14B" in model_path:
+        from pipeline.model_utils.deepseek_r1_qwen14b import Llama3Model
+        return Llama3Model(model_path)        
+    elif 'qwen' in model_path.lower():
         from pipeline.model_utils.qwen_model import QwenModel
         return QwenModel(model_path)
     if 'llama-3' in model_path.lower():
         from pipeline.model_utils.llama3_model import Llama3Model
         return Llama3Model(model_path)
+    elif "DeepSeek-R1-Distill-Llama-8B" in model_path:
+        from pipeline.model_utils.deepseek_r1_llama8b import Llama3Model
+        return Llama3Model(model_path)    
     elif 'llama' in model_path.lower():
         from pipeline.model_utils.llama2_model import Llama2Model
         return Llama2Model(model_path)

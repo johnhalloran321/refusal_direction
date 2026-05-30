@@ -125,16 +125,25 @@ class Llama3Model(ModelBase):
         Return token IDs that indicate refusal responses.
         These should be tokens that appear frequently in refusals but rarely in helpful responses.
         """
-        # Common refusal phrases
-        refusal_phrases = [
-            "I cannot",
-            "I can't",
-            "I'm sorry",
-            "I apologize",
-            "I'm not able",
-            "I am not able",
-            "Sorry,",
-        ]
+        # # Common refusal phrases
+        refusal_phrases = [' I', 'I', ' can', ' assist', ' Sorry', 
+                           ', but', ' help', ' sorry', ' cannot', "'t", "'m", " But", " but"]
+        # refusal_phrases.append("I'm sorry, but I can't assist with that request")
+        # refusal_phrases = [' I', 'I', ' can', ' assist', ' Sorry', ' but', ' help', ' sorry', ' cannot', "'t", "'m"]
+        # refusal_phrases = [
+        #     "I'm sorry",
+        #     "I'm sorry, but I can't",
+        #     "I can't assist",
+        #     "I cannot assist",
+        #     "I can't help",
+        #     "I cannot help",
+        #     " sorry",  # Note the leading space
+        #     " Sorry",
+        #     " but",
+        #     " But",
+        #     "but",
+        #     "But",
+        # ]
         
         refusal_toks = []
         for phrase in refusal_phrases:
@@ -143,7 +152,8 @@ class Llama3Model(ModelBase):
             # Often we want just the first token of each phrase
             # or you can use all tokens: refusal_toks.extend(toks)
             if len(toks) > 0:
-                refusal_toks.append(toks[0])
+                refusal_toks.extend(toks)
+                # refusal_toks.append(toks[0])
         
         # Remove duplicates
         refusal_toks = list(set(refusal_toks))

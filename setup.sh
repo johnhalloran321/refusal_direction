@@ -77,9 +77,9 @@ if [ $? -ne 0 ]; then
     return 1
 fi
 
-setup_hf
-setup_together
+# setup_hf
+# setup_together
 setup_venv
-install_requirements
+# install_requirements
 
 echo "All set up!"

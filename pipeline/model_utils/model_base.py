@@ -75,20 +75,41 @@ class ModelBase(ABC):
         for i in tqdm(range(0, len(dataset), batch_size)):
             tokenized_instructions = self.tokenize_instructions_fn(instructions=instructions[i:i + batch_size])
 
-            with add_hooks(module_forward_pre_hooks=fwd_pre_hooks, module_forward_hooks=fwd_hooks):
-                generation_toks = self.model.generate(
-                    input_ids=tokenized_instructions.input_ids.to(self.model.device),
-                    attention_mask=tokenized_instructions.attention_mask.to(self.model.device),
-                    generation_config=generation_config,
-                )
+        with add_hooks(module_forward_pre_hooks=fwd_pre_hooks, module_forward_hooks=fwd_hooks):
+            output_ids = self.model.generate(
+                input_ids=tokenized_instructions.input_ids.to(self.model.device),
+                attention_mask=tokenized_instructions.attention_mask.to(self.model.device),
+                generation_config=generation_config,
+            )
 
-                generation_toks = generation_toks[:, tokenized_instructions.input_ids.shape[-1]:]
+        for j, output_id in enumerate(output_ids):
+            generation = self.tokenizer.decode(output_id[tokenized_instructions.input_ids.shape[-1]:], skip_special_tokens=True)
+            
+            # ADD: Remove </think> prefix if present
+            generation = generation.strip()
+            if generation.startswith("</think>"):
+                generation = generation[len("</think>"):].strip()
+            
+            completions.append({
+                'prompt': instructions[i + j],
+                'response': generation,
+                'category': categories[i + j]
+            })
 
-                for generation_idx, generation in enumerate(generation_toks):
-                    completions.append({
-                        'category': categories[i + generation_idx],
-                        'prompt': instructions[i + generation_idx],
-                        'response': self.tokenizer.decode(generation, skip_special_tokens=True).strip()
-                    })
+            # with add_hooks(module_forward_pre_hooks=fwd_pre_hooks, module_forward_hooks=fwd_hooks):
+            #     generation_toks = self.model.generate(
+            #         input_ids=tokenized_instructions.input_ids.to(self.model.device),
+            #         attention_mask=tokenized_instructions.attention_mask.to(self.model.device),
+            #         generation_config=generation_config,
+            #     )
+
+            #     generation_toks = generation_toks[:, tokenized_instructions.input_ids.shape[-1]:]
+
+            #     for generation_idx, generation in enumerate(generation_toks):
+            #         completions.append({
+            #             'category': categories[i + generation_idx],
+            #             'prompt': instructions[i + generation_idx],
+            #             'response': self.tokenizer.decode(generation, skip_special_tokens=True).strip()
+            #         })
 
         return completions
