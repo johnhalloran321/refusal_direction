@@ -20,20 +20,54 @@ def parse_arguments():
     parser = argparse.ArgumentParser(description="Parse model path argument.")
     parser.add_argument('--model_path', type=str, required=True, help='Path to the model')
     parser.add_argument('--batch_size', type=int, default = 2)
+    parser.add_argument('--ablation', action='store_true', help='Use AdvBench as the harmful dataset instead of the default split (for dataset sensitivity ablation)')
     return parser.parse_args()
 
-def load_and_sample_datasets(cfg):
+def load_lima_instructions():
+    """Load LIMA instructions (first user turn) directly from HuggingFace datasets."""
+    from datasets import load_dataset as hf_load_dataset
+    lima = hf_load_dataset("GAIR/lima", split="train")
+    # Each example has a 'conversations' list: [user_turn, assistant_turn, ...]
+    return [example["conversations"][0] for example in lima]
+
+def load_and_sample_datasets(cfg, use_advbench=False):
     """
     Load datasets and sample them based on the configuration.
+
+    Default (no --ablation):
+        harmful:  default split  — 128 train / 32 val
+        harmless: default split  — 128 train / 32 val  (Alpaca-based)
+
+    With --ablation:
+        harmful:  AdvBench       — 128 train / 32 val  (same sizes)
+        harmless: LIMA           — 128 train / 32 val  (same sizes)
 
     Returns:
         Tuple of datasets: (harmful_train, harmless_train, harmful_val, harmless_val)
     """
     random.seed(42)
-    harmful_train = random.sample(load_dataset_split(harmtype='harmful', split='train', instructions_only=True), cfg.n_train)
-    harmless_train = random.sample(load_dataset_split(harmtype='harmless', split='train', instructions_only=True), cfg.n_train)
-    harmful_val = random.sample(load_dataset_split(harmtype='harmful', split='val', instructions_only=True), cfg.n_val)
-    harmless_val = random.sample(load_dataset_split(harmtype='harmless', split='val', instructions_only=True), cfg.n_val)
+
+    if use_advbench:
+        # Harmful: AdvBench (520 entries, all harmful)
+        all_harmful = load_dataset('advbench', instructions_only=True)
+        harmful_train = random.sample(all_harmful, cfg.n_train)           # 128
+        remaining     = [x for x in all_harmful if x not in set(harmful_train)]
+        harmful_val   = random.sample(remaining, cfg.n_val)               # 32
+        print(f"[ablation] Harmful: AdvBench — {cfg.n_train} train / {cfg.n_val} val")
+
+        # Harmless: LIMA (~1000 entries, all benign)
+        all_harmless  = load_lima_instructions()
+        harmless_train = random.sample(all_harmless, cfg.n_train)         # 128
+        remaining      = [x for x in all_harmless if x not in set(harmless_train)]
+        harmless_val   = random.sample(remaining, cfg.n_val)              # 32
+        print(f"[ablation] Harmless: LIMA   — {cfg.n_train} train / {cfg.n_val} val")
+    else:
+        # Default: pre-built splits (Alpaca-based harmless)
+        harmful_train  = random.sample(load_dataset_split(harmtype='harmful',  split='train', instructions_only=True), cfg.n_train)
+        harmful_val    = random.sample(load_dataset_split(harmtype='harmful',  split='val',   instructions_only=True), cfg.n_val)
+        harmless_train = random.sample(load_dataset_split(harmtype='harmless', split='train', instructions_only=True), cfg.n_train)
+        harmless_val   = random.sample(load_dataset_split(harmtype='harmless', split='val',   instructions_only=True), cfg.n_val)
+
     return harmful_train, harmless_train, harmful_val, harmless_val
 
 def filter_data(cfg, model_base, harmful_train, harmless_train, harmful_val, harmless_val):
@@ -326,6 +360,8 @@ def evaluate_loss_for_datasets(cfg, model_base, fwd_pre_hooks, fwd_hooks, interv
 def run_pipeline(model_path):
     """Run the full pipeline."""
     model_alias = os.path.basename(model_path)
+    if args.ablation:
+        model_alias = model_alias + "-advbench"
     cfg = Config(model_alias=model_alias, model_path=model_path)
     setattr(cfg, "ce_loss_batch_size", args.batch_size)
     model_base = construct_model_base(cfg.model_path)
@@ -346,7 +382,7 @@ def run_pipeline(model_path):
     # exit(-1)
 
     # Load and sample datasets
-    harmful_train, harmless_train, harmful_val, harmless_val = load_and_sample_datasets(cfg)
+    harmful_train, harmless_train, harmful_val, harmless_val = load_and_sample_datasets(cfg, use_advbench=args.ablation)
     # Filter datasets based on refusal scores
     harmful_train, harmless_train, harmful_val, harmless_val = filter_data(cfg, model_base, harmful_train, harmless_train, harmful_val, harmless_val)
 
