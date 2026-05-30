@@ -26,7 +26,7 @@ def parse_arguments():
 def load_lima_instructions():
     """Load LIMA instructions (first user turn) directly from HuggingFace datasets."""
     from datasets import load_dataset as hf_load_dataset
-    lima = hf_load_dataset("GAIR/lima", split="train")
+    lima = hf_load_dataset("Ki-Seki/GAIR_lima", split="train")
     # Each example has a 'conversations' list: [user_turn, assistant_turn, ...]
     return [example["conversations"][0] for example in lima]
 
